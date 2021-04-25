@@ -1,0 +1,26 @@
+{
+  "rules": {
+    ".read": true,
+    ".write": true,
+    "users": {
+      "$uid": {
+        ".read": "$uid === auth.uid",
+        ".write": "$uid === auth.uid"
+      },
+      ".indexOn": [
+        "email_address",
+        "phone_number"
+      ]
+    },
+    "users_locations": {
+      ".indexOn": [
+        "g"
+      ]
+    },
+    "flares_locations": {
+      ".indexOn": [
+        "g"
+      ]
+    }
+  }
+}
