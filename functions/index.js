@@ -182,6 +182,8 @@ exports.fireBengal = functions.https.onRequest( async (data, response) => {
 //  return Promise.all(promiseFlaresStocks);
  response.status(200).send({ msg: "typeof(data.notification_token) "})  ;
 
+
+ 
 /*
     if (bengalsStocksSnapshot.exists && bengalsStocksSnapshot.numChildren() > 0) {
       var freeBengalFound = false;
