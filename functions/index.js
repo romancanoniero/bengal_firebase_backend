@@ -13,10 +13,19 @@ const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const GeoFire = require('geofire');
 const { HttpsError } = require("firebase-functions/lib/providers/https");
+const { log } = require("firebase-functions/lib/logger");
 //const express = require("express");
 //const cors = require("cors");
 
 admin.initializeApp();
+/*
+module.exports = {
+  ...require("./controllers/bengals.js"),
+
+};
+*/
+
+
 const db = admin.database();
 
 
@@ -30,25 +39,20 @@ const GEOHASH_PRECISION = 10;
 const BASE32 = '0123456789bcdefghjkmnpqrstuvwxyz';
 
 
-
-class FlareGeoLocation {
-  user_key = "";
-  day_of_launch = "";
-  day_of_birth = "";
-  user_name = "";
-  user_image_url = "";
-  searching_sexual_orientation = [];
-  searching_relation_types = [];
-  time_of_launch = 0;
-}
+const FLARE_STATUS_TAKEN = 1;
+const FLARE_STATUS_DELETED = 2;
 
 
 const TABLE_USERS_FLARES = "users_flares";
 const TABLE_USERS = "users";
 const TABLE_FLARES_LOCATIONS = "flares_locations";
 const TABLE_USER_FLARES = "users_flares";
+const TABLE_USERS_WHO_TAKES_FLARES = "users_who_liked_me";
+const TABLE_USERS_FLARES_RECEIVED = "users_flares_received";
 
-
+const tableUsersRef = admin.database().ref('/users/');
+const likesRef = admin.database().ref('/' + TABLE_USERS_WHO_TAKES_FLARES + "/");
+const flaresReceivedRef = admin.database().ref('/' + TABLE_USERS_FLARES_RECEIVED + "/");
 
 
 // // Create and Deploy Your First Cloud Functions
@@ -68,62 +72,62 @@ exports.randomNumber = functions.https.onRequest((request, response) => {
 
 
 exports.sendNotification = functions.https.onCall(async (data, context) => {
-  console.log("111");
-
-
-  /*
-  if (!context.auth)
-  {
-    throw new functions.https.HttpsError("unauthenticated", "only authenticated users can send notifications"); 
-  }
-  */
-
   sendNotification(data);
-
   return 'sorete';
 })
 
 
 
-function sendNewBengalNotification(response, usersKeysArray) {
-
-
+function sendNewBengalNotification(response, userData, usersKeysArray) {
   const tableUsersRef = admin.database().ref('/users');
   var notificationData = {};
+  notificationData["notification_type"] = "1"; // new bengal on sky
+  notificationData["sender_key"] = userData.key; // sender
+  notificationData["sender_name"] = userData.user_name; // sender
+  //  log("profile image :"+userData.user_image_url);
+  notificationData["profile_image_url"] = userData.user_image_url; // sender
 
-
-  notificationData["notification_type"] = 1; // new bengal on sky
-  notificationData["sender_name"] = "Roman"; // sender
-
+  const promises = [];
   usersKeysArray.forEach(userKey => {
-    tableUsersRef.child(userKey)
-      .child("notification_token")
-      .once("value")
-      .then(function (snap) {
-        if (snap.exists) {
-          notificationData["notification_token"] = snap.val(); // sender
-          sendNotification(response, notificationData);
-        }
-      });
+    if (userKey.localeCompare(userData.key) != 0) {
+      tableUsersRef.child(userKey)
+        .child("notification_token")
+        .once("value")
+        .then(function (snap) {
+          if (snap.exists) {
+            notificationData["notification_token"] = snap.val(); // sender
+            promises.push(sendNotification(response, notificationData));
+          }
+        });
+    }
   });
 
-  return response.status(200).json({ data: "OK", message: "any_message_if_you_want" });
+  Promise.all(promises)
+    .then(() => {
+      return response.status(200).json(new resultObject(0, "OK"));
+    })
+    .catch(errPromises => {
+      console.log("an error occured during the processing of main promises");
+      console.log(errPromises, errPromises.code);
+      return "error";
+    })
+
+
 
 
 }
 
 
 
-function sendNotification(response, data) {
+function sendNotification(response, notificationData) {
 
-
-
-  if (data != undefined) {
-    var notificationToken = data.notification_token;
+  if (notificationData != undefined) {
+    var notificationToken = notificationData.notification_token;
   }
 
 
   var topic = "android";
+  /*
   var message = {
     notification: {
       title: '$GOOG up 1.43% on the day',
@@ -131,7 +135,32 @@ function sendNotification(response, data) {
     },
     token: notificationToken
   };
-  //  token: "cF5MlwdkThioJ0ipGuJTpD:APA91bE3lpSTZxLOHWxM5SPc2YYO3Q6SNGXgsdFnPY8efJyJ3_jFIJF5TSv7cn-8vmowwRn6b2WduqytHN7fjGiFBhvJCtUZICg2Z6y0uGIVXbxrY9LnO9lbGfMnw5UfLBZxS9JMe6ph"
+*/
+  var token = notificationData.notification_token;
+  delete notificationData.notification_token;
+  var params = JSON.stringify(notificationData)
+  message = {};
+  android = {};
+
+  notification = {};
+  // notification["title"] = "Titulo";
+  // notification["body"] = "Texto";
+  notification["title_loc_key"] = "notifications_title_new_flare_on_sky_title";
+  notification["body_loc_key"] = "notifications_title_new_flare_on_sky_message";
+  notification["body_loc_args"] = [notificationData.sender_name];
+  notification["image"] = notificationData.profile_image_url;
+  notification["click_action"] = 'VIEW_PROFILE_ACTION';
+  android["notification"] = notification;
+
+  message["android"] = android;
+  message["token"] = token;
+
+  message["data"] = {
+    "link_key": notificationData.sender_key,
+    "action": notification["click_action"]
+  };
+
+
   try {
     const response = admin.messaging().send(message);
     console.log("Successfully sent message", response);
@@ -201,100 +230,109 @@ exports.fireBengal3 = functions.https.onRequest(async (data, response) => {
 exports.fireBengal = functions.https.onRequest((request, response) => {
 
   try {
-
     var usersAround = [];
     const lat = parseFloat(request.body.data.lat);
     const lon = parseFloat(request.body.data.lon);
     const userKey = request.body.data.key;
     const notificationToken = request.body.data.notification_token;
-
-    const tableUsersRef = admin.database().ref('/users/');
-    const tableFlaresLocationsRef = admin.database().ref('/' + TABLE_FLARES_LOCATIONS + "/");
-    const tableFlaresStocksRef = admin.database().ref('/' + TABLE_USER_FLARES + "/");
-    const geoFire = new GeoFire(admin.database().ref("/users_locations"));
-
-    const location = [lat, lon];
+    const authToken = request.body.data.auth_token;
 
 
-    tableFlaresStocksRef.child(userKey).once("value").then(bengalsStocksSnapshot => {
-      if (bengalsStocksSnapshot.exists && bengalsStocksSnapshot.numChildren() > 0) {
-        var freeBengalFound = false;
-        bengalsStocksSnapshot.forEach(function (snap) {
-          if (!freeBengalFound) {
-            const transactionRecord = snap.val();
-            const transactionKey = transactionRecord.lot_key;
-            if (transactionRecord.quantity > 0) {
-              freeBengalFound = true;
-              // Obtengo los datos del Usuario asi creo la Bengala  
-              tableUsersRef.child(userKey).once('value', function (querySnapshot) {
-                if (querySnapshot.exists) {
-                  var user = querySnapshot.val();
-                  if (notificationToken.localeCompare(user.notification_token) == 0) {
-                    var newFlare = createFlareObject(user, location);
-                    // Grabo la Bengala
-                    var newFlareKey = tableFlaresLocationsRef.push().key.toString();
-                    tableFlaresLocationsRef.child(newFlareKey).set(newFlare)
-                      .then(function (snap) {
-                        tableUsersRef.child(userKey)
-                          .child('flares')
-                          .child(newFlareKey)
-                          .set(newFlare)
-                          .then(function (result) {
+    admin.auth().verifyIdToken(authToken)
+      .then(() => {
 
-                            if (transactionRecord.quantity - 1 > 0) {
-                              tableFlaresStocksRef.child(userKey)
-                                .child(transactionKey)
-                                .child("quantity")
-                                .set(transactionRecord.quantity - 1);
+    
+        const tableFlaresLocationsRef = admin.database().ref('/' + TABLE_FLARES_LOCATIONS + "/");
+        const tableFlaresStocksRef = admin.database().ref('/' + TABLE_USER_FLARES + "/");
+        const geoFire = new GeoFire(admin.database().ref("/users_locations"));
+        const location = [lat, lon];
+        tableFlaresStocksRef.child(userKey).once("value").then(bengalsStocksSnapshot => {
+          if (bengalsStocksSnapshot.exists && bengalsStocksSnapshot.numChildren() > 0) {
+            var freeBengalFound = false;
+            bengalsStocksSnapshot.forEach(function (snap) {
+              if (!freeBengalFound) {
+                const transactionRecord = snap.val();
+                const transactionKey = transactionRecord.lot_key;
+                if (transactionRecord.quantity > 0) {
+                  freeBengalFound = true;
+                  // Obtengo los datos del Usuario asi creo la Bengala  
+                  tableUsersRef.child(userKey).once('value', function (querySnapshot) {
+                    if (querySnapshot.exists) {
+                      var user = querySnapshot.val();
+                      if (notificationToken.localeCompare(user.notification_token) == 0) {
+                        var newFlare = createFlareObject(user, location);
+                        // Grabo la Bengala
+                        var newFlareKey = tableFlaresLocationsRef.push().key.toString();
+                        tableFlaresLocationsRef.child(newFlareKey).set(newFlare)
+                          .then(function (snap) {
+                            tableUsersRef.child(userKey)
+                              .child('flares')
+                              .child(newFlareKey)
+                              .set(newFlare)
+                              .then(function (result) {
+                                if (transactionRecord.quantity - 1 > 0) {
+                                  tableFlaresStocksRef.child(userKey)
+                                    .child(transactionKey)
+                                    .child("quantity")
+                                    .set(transactionRecord.quantity - 1);
 
-                            }
-                            else {
-                              tableFlaresStocksRef.child(userKey)
-                                .child(transactionKey)
-                                .remove();
-                            }
-                            var geoQuery = geoFire.query({
-                              center: location,
-                              radius: 300
-                            });
-                            var onKeyEnteredRegistration = geoQuery.on('key_entered', (key, location, distance) => {
-                              usersAround.push(key);
-                            });
-                            var onKeyEnteredRegistration = geoQuery.on('ready', () => {
-                              sendNewBengalNotification(response, usersAround);
-                              //     return   response.status(200).json({ data: "OK", message: "any_message_if_you_want" });
-                            });
-                          })
+                                }
+                                else {
+                                  tableFlaresStocksRef.child(userKey)
+                                    .child(transactionKey)
+                                    .remove();
+                                }
+                                var geoQuery = geoFire.query({
+                                  center: location,
+                                  radius: 300
+                                });
+                                var onKeyEnteredRegistration = geoQuery.on('key_entered', (key, location, distance) => {
+                                  usersAround.push(key);
+                                });
+                                var onKeyEnteredRegistration = geoQuery.on('ready', () => {
 
-                      });
-                  }
-                  else {
-                    return response.status(200).json({ data: "INVALID_TOKEN", message: "The read failed: " });
-                  }
+                                  var userData = {};
+                                  userData["key"] = user.user_key;
+                                  userData["user_name"] = user.display_name;
+                                  userData["user_image_url"] = getSortedData(user.images, 'isFavorite', true)[0].url;
+                                  sendNewBengalNotification(response, userData, usersAround);
+                                  //    return   response.status(200).json({ data:  new resultObject(0, "OK") });
+                                });
+                              })
+
+                          });
+                      }
+                      else {
+                        return response.status(200).json(resultObject(1002, "INVALID_TOKEN"));
+                      }
+                    }
+                    else {
+                      return response.status(200).json({ data: "UNKNOWN_USER", message: "The read failed: " });
+                    }
+                  }, function (error) {
+                    //                return response.status(200).json({code: 1001,  data: "NO_BENGAL_ENOUGH", message: "The read failed: " + error.code });
+                    return response.status(200).json(new resultObject(1001, "NO_BENGAL_ENOUGH"));
+                  });
+
                 }
-                else {
-                  return response.status(200).json({ data: "UNKNOWN_USER", message: "The read failed: " });
-                }
-              }, function (error) {
-                return response.status(200).json({ data: "NO_BENGAL_ENOUGH", message: "The read failed: " + error.code });
-
-              });
-
-            }
+              }
+            });
           }
+          else {
+            return response.status(200).json(new resultObject(1001, "NO_BENGAL_ENOUGH"));
+          }
+
+
         });
-        /*
-                if (freeBengalFound == false) {
-                  response.status(400).json({ data: "NO_BENGAL_ENOUGH", message: "El Usuario no tiene suficientes Bengalas" });
-                }
-        */
-      }
-      else {
-        return response.status(200).json({ data: "NO_BENGAL_ENOUGH", message: "El Usuario no tiene suficientes Bengalas" });
-      }
 
 
-    });
+      })
+      .catch((error) => {
+        return response.status(200).json(new resultObject(1101, "UNAUTHORIZED_USER"));
+      })
+
+
+
 
 
   } catch (error) {
@@ -399,17 +437,126 @@ exports.fireBengal = functions.https.onRequest((request, response) => {
 
 });
 
+exports.giveALike = functions.https.onRequest((request, response) => {
+
+  try {
+    var usersAround = [];
+    const userWhoGaveLike = request.body.data.user_who_give_like_key;
+    const userLiked = request.body.data.user_liked_key;
+    const authToken = request.body.data.auth_token;
+
+    like = UsersWhoLikesMe();
+    like.user_who_give_like_key = userWhoGaveLike;
+    like.user_liked_key = userLiked;
+
+    admin.auth().verifyIdToken(authToken)
+      .then(() => {
+
+        likesRef.child(like.user_liked_key)
+          .child(like.user_who_give_like_key)
+          .set(like)
+          .then(() => {
+
+            flaresReceivedRef.child(user_who_give_like_key)
+              .child(user_liked_key)
+              .child("status")
+              .set(FLARE_STATUS_TAKEN)
+              .then(() => {
+                return response.status(200).json(new resultObject(0, "OK"));
+              })
+              .catch(error => {
+                return response.status(200).json(new resultObject(-1, error.message));
+              });
+
+          })
+
+      })
+      .catch((error) => {
+        return response.status(200).json(new resultObject(1101, "UNAUTHORIZED_USER"));
+      })
+
+  } catch (error) {
+    return response.status(200).json({ data: error.code });
+  }
+});
+
+/*
+* Hace invisible una bengala para que no se visible para ese usuario
+*/
+exports.removeFlareReceived = functions.https.onRequest((request, response) => {
+
+  try {
+    var usersAround = [];
+    const userWhoFiredTheFlareKey = request.body.data.user_who_fired_the_flare_key;
+    const userWhoReceiveKey = request.body.data.user_who_receive_key;
+    const authToken = request.body.data.auth_token;
+
+    admin.auth().verifyIdToken(authToken)
+      .then(() => {
+        flaresReceivedRef.child(userWhoReceiveKey)
+          .child(userWhoFiredTheFlareKey)
+          .child("status")
+          .set(FLARE_STATUS_DELETED)
+          .then(() => {
+            return response.status(200).json(new resultObject(0, "OK"));
+          })
+          .catch(error => {
+            return response.status(200).json(new resultObject(-1, error.message));
+          });
+      })
+      .catch((error) => {
+        return response.status(200).json(new resultObject(1101, "UNAUTHORIZED_USER"));
+      })
+
+  } catch (error) {
+    return response.status(200).json({ data: error.code });
+  }
+});
+
+//--------------------------------------- USERS ------------------------------//
+exports.blockUser = functions.https.onRequest((request, response) => {
+
+  try {
+    var usersAround = [];
+    const userWhoBlocksKey = request.body.data.user_who_blocks_key;
+    const userWhoToBlockKey = request.body.data.user_to_block_key;
+    const authToken = request.body.data.auth_token;
+
+    admin.auth().verifyIdToken(authToken)
+      .then(() => {
+
+        tableUsersRef.child(userWhoBlocksKey)
+          .child("blocked")
+          .child(userWhoToBlockKey)
+          .set(userWhoToBlockKey)
+          .then(() => {
+            return response.status(200).json(new resultObject(0, "OK"));
+          })
+          .catch(error => {
+            return response.status(200).json(new resultObject(-1, error.message));
+          });
+      })
+      .catch((error) => {
+        return response.status(200).json(new resultObject(1101, "UNAUTHORIZED_USER"));
+      })
+
+      
+
+  } catch (error) {
+    return response.status(200).json({ data: error.code });
+  }
+});
 
 
 function resultObject(status, message) {
   var resultObject = {};
-
   var messageObject = {};
   messageObject["status"] = status;
   messageObject["message"] = message;
   resultObject["data"] = messageObject;
-  return JSON.stringify(resultObject);
+  //  return JSON.stringify(resultObject);
 
+  return resultObject;
 
 }
 
@@ -581,3 +728,24 @@ function getSortedData(data, prop, isAsc) {
     return (a[prop] < b[prop] ? -1 : 1) * (isAsc ? 1 : -1)
   });
 }
+
+
+//------------------------- CLASSES -----------------------------------
+class FlareGeoLocation {
+  user_key = "";
+  day_of_launch = "";
+  day_of_birth = "";
+  user_name = "";
+  user_image_url = "";
+  searching_sexual_orientation = [];
+  searching_relation_types = [];
+  time_of_launch = 0;
+}
+
+
+class UsersWhoLikesMe {
+  user_liked_key = "";
+  user_who_likes_key = "";
+}
+
+
