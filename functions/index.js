@@ -49,11 +49,14 @@ const TABLE_FLARES_LOCATIONS = "flares_locations";
 const TABLE_USER_FLARES = "users_flares";
 const TABLE_USERS_WHO_TAKES_FLARES = "users_who_liked_me";
 const TABLE_USERS_FLARES_RECEIVED = "users_flares_received";
+const TABLE_USERS_LOCATIONS = "users_locations";
+
+ 
 
 const tableUsersRef = admin.database().ref('/users/');
 const likesRef = admin.database().ref('/' + TABLE_USERS_WHO_TAKES_FLARES + "/");
 const flaresReceivedRef = admin.database().ref('/' + TABLE_USERS_FLARES_RECEIVED + "/");
-
+const tableUsersLocationsRef = admin.database().ref('/' + TABLE_USERS_LOCATIONS + "/");
 
 // // Create and Deploy Your First Cloud Functions
 // // https://firebase.google.com/docs/functions/write-firebase-functions
@@ -287,6 +290,9 @@ exports.fireBengal = functions.https.onRequest((request, response) => {
                                   radius: 300
                                 });
                                 var onKeyEnteredRegistration = geoQuery.on('key_entered', (key, location, distance) => {
+                                  
+                       //           return   response.status(200).json({ data:  new resultObject(0, JSON.stringify(user.blocked)) });
+                                  
                                   usersAround.push(key);
                                 });
                                 var onKeyEnteredRegistration = geoQuery.on('ready', () => {
@@ -530,7 +536,18 @@ exports.blockUser = functions.https.onRequest((request, response) => {
           .child(userWhoToBlockKey)
           .set(userWhoToBlockKey)
           .then(() => {
-            return response.status(200).json(new resultObject(0, "OK"));
+
+            tableUsersLocationsRef.child(userWhoBlocksKey)
+                                  .child("blocked")
+                                  .child(userWhoToBlockKey)  
+                                  .set(userWhoToBlockKey)
+                                  .then(()=>{
+                                      return response.status(200).json(new resultObject(0, "OK"));
+                                  })
+                                  .catch(error => {
+                                    return response.status(200).json(new resultObject(-1, error.message));
+                                  });
+                        
           })
           .catch(error => {
             return response.status(200).json(new resultObject(-1, error.message));
@@ -590,7 +607,12 @@ function createFlareObject(user, location) {
   newFlare.searching_sexual_orientation = user.searching_sexual_orientation
   newFlare.searching_relation_types = user.searching_relation_types
   newFlare.searching_age_ranges = user.searching_age_ranges
-
+  newFlare.blocked = []
+  if (user.blocked!=null)
+  {
+    newFlare.blocked = user.blocked
+  }
+  
   newFlare.g = geohashForLocation(location);
   newFlare.l = location;
 
@@ -740,6 +762,7 @@ class FlareGeoLocation {
   searching_sexual_orientation = [];
   searching_relation_types = [];
   time_of_launch = 0;
+  blocked = [];
 }
 
 
